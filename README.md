@@ -1,0 +1,92 @@
+# Claude Boost 增强包
+
+一个 [Google Antigravity（反重力）](https://antigravity.google) 插件：把 Claude Code 里好用、反重力缺少的工作机制带进反重力。
+
+纯 Node.js 实现，无任何第三方依赖；支持 Windows / macOS / Linux。
+
+## 功能
+
+### 自动生效（钩子）
+
+| 功能 | 你会看到什么 |
+| --- | --- |
+| **编辑前自动快照** | 无感。Agent 每次写文件前自动备份原文件，配合 `rewind` 技能随时回滚，没有 git 也能用 |
+| **危险命令强制确认** | 即使开了 Turbo / 全部允许，`rm -rf ~`、`git push --force`、`git reset --hard`、`DROP TABLE`、格式化磁盘、`curl … \| sh`、发布包、部署生产等仍会弹一次确认。`rm -rf node_modules`、`git push` 等日常命令不受影响 |
+| **防密钥泄露** | 往代码里写真实格式的密钥（GitHub / OpenAI / Anthropic / AWS / Google / Stripe token、私钥、带密码的连接串等）会弹确认，提示中密钥已打码；`git add` 会带上未忽略的 `.env` / 私钥，或 `git commit` 内容含密钥时也会确认。写进 `.env` 本身不拦 |
+| **死循环检测** | 同一命令失败 2 次、连续 5 条命令失败、同一文件改 6 次还没验证成功时，在 Agent 下一步思考前提醒它换思路或停下来问你 |
+| **改完自动检查** | 每次编辑后对该文件做快速检查（项目有 ESLint 就跑 ESLint；JS / TS 语法、JSON、Python 用 ruff 或语法检查），有错立刻反馈给 Agent，同一错误只报一次 |
+| **改完提醒验证** | Agent 改了代码却一条命令没跑就想收工时，提醒它验证一次 |
+| **长任务完成通知** | 一轮任务跑了 60 秒以上，结束时弹系统通知（完成 / 出错 / 达到上限），手动取消的不通知 |
+| **长期记忆注入** | 每个新会话开头自动带上记忆索引 |
+| **交接提示** | 新会话开头提示工作区里还没接手的交接文件 |
+
+### 技能（对 Agent 说就行）
+
+| 技能 | 怎么触发 |
+| --- | --- |
+| `rewind` 回滚 | "撤销刚才的改动" / "回到改之前" |
+| `memory` 长期记忆 | "记住：这个项目只用 pnpm" / "忘掉 xxx" |
+| `code-review` 代码审查 | "审查一下我的改动"：只报有具体触发场景的 bug |
+| `security-review` 安全审查 | "上线前做个安全检查"：注入、越权、SSRF、泄露、依赖漏洞 |
+| `init` 项目说明 | "init" / "生成 AGENTS.md"：扫描项目写出构建、测试命令和约定 |
+| `commit` 提交 | "提交一下" / "开个 PR"：逐个文件 add、排除密钥、按仓库风格写提交信息 |
+| `handoff` 会话交接 | 对话太长时说"交接"，新对话里说"继续上次的交接" |
+
+另外 `rules/AGENTS.md` 带了一套工作准则：先读再改、改完验证、难撤销的先确认、汇报简洁。
+
+## 安装
+
+需要 Node.js 18 及以上，并且 `node` 在 PATH 中。
+
+```bash
+git clone <本仓库地址> ~/.gemini/config/plugins/claude-boost
+```
+
+Windows PowerShell：
+
+```powershell
+git clone <本仓库地址> "$env:USERPROFILE\.gemini\config\plugins\claude-boost"
+```
+
+反重力会自动加载（无需重启），在 Customizations 页面能看到 **Claude Boost 增强包**。
+
+## 配置
+
+`~/.gemini/claude-boost/config.json`（可选）：
+
+```json
+{ "notify": true, "notifyMinSeconds": 60 }
+```
+
+关闭某一组钩子：编辑插件目录下的 `hooks.json`，在对应条目里加 `"enabled": false`。
+
+| 钩子组 | 包含 |
+| --- | --- |
+| `claude-boost-guard` | 危险命令拦截、git 提交密钥检查 |
+| `claude-boost-checkpoint` | 编辑前快照、写入密钥检查 |
+| `claude-boost-autocheck` | 死循环检测、改完自动检查 |
+| `claude-boost-memory` | 记忆注入、交接提示、清理过期快照 |
+| `claude-boost-verify` | 提醒验证、完成通知 |
+
+## 手动回滚
+
+```bash
+node ~/.gemini/config/plugins/claude-boost/scripts/rewind.mjs list
+node ~/.gemini/config/plugins/claude-boost/scripts/rewind.mjs rewind 12 --dry-run
+```
+
+## 数据与隐私
+
+所有数据只保存在本机 `~/.gemini/claude-boost/`（快照、会话状态、记忆、`hooks.log`），快照和状态保留 14 天，插件不联网。
+
+## 开发
+
+```bash
+node test/run-tests.mjs
+```
+
+测试使用临时目录，不影响真实数据。
+
+## 许可证
+
+MIT
