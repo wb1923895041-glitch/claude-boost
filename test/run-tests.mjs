@@ -10,7 +10,7 @@ import { scanSecrets } from '../hooks/secrets.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-test-'));
 const NOTIFY_FILE = path.join(TMP, 'notify.jsonl');
-const env = { ...process.env, CLAUDE_BOOST_HOME: path.join(TMP, 'data'), CLAUDE_BOOST_NOTIFY_FILE: NOTIFY_FILE };
+const env = { ...process.env, CLAUDE_BOOST_HOME: path.join(TMP, 'data'), CLAUDE_BOOST_NOTIFY_FILE: NOTIFY_FILE, CLAUDE_BOOST_RETRY_WAIT_MS: '0' };
 let fail = 0;
 const ok = (cond, name) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}`); if (!cond) fail++; };
 
@@ -204,6 +204,34 @@ ok(sysMsg(preAfterCheck('chk').second) === '', 'check: 正确的 Python 不误�
 // 第一次见到的会话不回放历史记录（避免对旧会话补发提醒）
 fs.writeFileSync(trOf('old'), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'x' } }] }) + '\n' + JSON.stringify({ type: 'GENERIC', status: 'ERROR', content: 'boom' }) + '\n');
 ok(sysMsg(pre('old')) === '', 'check: 已有历史的会话首次接入时不回放旧结果');
+
+// ---- 重复读取提醒 ----
+fs.writeFileSync(trOf('rd'), JSON.stringify({ type: 'USER_INPUT', content: 'hi' }) + '\n'); pre('rd');
+const frd = path.join(proj, 'big.css');
+fs.writeFileSync(frd, 'a{}\n'.repeat(12000));
+post('rd', 'view_file', { AbsolutePath: frd }); post('rd', 'view_file', { AbsolutePath: frd });
+ok(sysMsg(pre('rd')) === '', 'read: 读 2 次不提醒');
+post('rd', 'view_file', { AbsolutePath: frd });
+r = sysMsg(pre('rd'));
+ok(/big\.css 已经第 3 次被读取/.test(r) && /KB/.test(r), 'read: 内容没变却读第 3 次 → 提醒（大文件注明大小）');
+post('rd', 'view_file', { AbsolutePath: frd, StartLine: 1, EndLine: 50 });
+ok(sysMsg(pre('rd')) === '', 'read: 按行号范围读取单独计数，不误报');
+sleepMs(20); fs.appendFileSync(frd, 'b{}\n');
+for (let i = 0; i < 2; i++) post('rd', 'view_file', { AbsolutePath: frd });
+ok(sysMsg(pre('rd')) === '', 'read: 文件改过之后重新计数');
+
+// ---- 报错中断后自动续上 ----
+const stopR = (c, extra) => hook('stop.mjs', { conversationId: c, terminationReason: 'ERROR', ...extra });
+r = stopR('rt1', { error: 'API error (attempt 3): request failed: Post "https://x/v1:streamGenerateContent": EOF' });
+ok(r.decision === 'continue' && /自动重试/.test(r.reason), 'retry: 网络 EOF 中断 → 自动续上');
+ok(stopR('rt1', { error: 'EOF', continuationActive: true }).decision !== 'continue', 'retry: 续上后又出错 → 不再重试（每轮最多一次）');
+ok(stopR('rt2', { error: 'HTTP 429 RESOURCE_EXHAUSTED' }).decision === 'continue', 'retry: 429 限流 → 自动续上');
+ok(stopR('rt5', { error: 'request failed: read tcp 1.2.3.4:5->6.7.8.9:443: wsarecv: An existing connection was forcibly closed by the remote host.' }).decision === 'continue', 'retry: 连接被强制关闭 → 自动续上');
+ok(stopR('rt6', { error: 'request failed: dial tcp: lookup example.googleapis.com: no such host' }).decision === 'continue', 'retry: DNS 解析失败 → 自动续上');
+ok(stopR('rt7', { error: 'The stream was interrupted. Please continue the task you were working on.' }).decision === 'continue', 'retry: 流被打断 → 自动续上');
+ok(stopR('rt8', { error: 'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription' }).decision !== 'continue', 'retry: 配额用完 → 不重试（重试也没用）');
+ok(stopR('rt3', { error: 'invalid argument: tool schema mismatch' }).decision !== 'continue', 'retry: 非临时性错误 → 不重试');
+ok(stopR('rt4', {}).decision !== 'continue', 'retry: 没有错误信息 → 不重试');
 
 // ---- 交接提示 ----
 const hdir = path.join(proj, '.agents', 'handoff');

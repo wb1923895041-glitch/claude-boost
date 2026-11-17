@@ -52,6 +52,32 @@ function onEdit(r, st, toCheck) {
   if (r.status === 'ok') toCheck.add(file);
 }
 
+const READ_TOOLS = /^(view_file|read_file)$/;
+const READ_WARN = 3;
+
+/** 同一文件、同一范围、内容没变却反复读取：每次都会把整段内容再塞进上下文。 */
+function onRead(r, st) {
+  const a = r.args;
+  const file = normPath(a.AbsolutePath || a.Path || a.TargetFile || a.FilePath);
+  if (!file || r.status !== 'ok') return;
+  let mtime = 0;
+  let size = 0;
+  try { const s = fs.statSync(file); mtime = Math.round(s.mtimeMs); size = s.size; } catch { return; }
+  const range = `${a.StartLine ?? ''}-${a.EndLine ?? ''}`;
+  const key = `${file}|${range}`;
+  st.reads ||= {};
+  const prev = st.reads[key];
+  const n = prev && prev.mtime === mtime ? prev.n + 1 : 1;
+  st.reads[key] = { mtime, n };
+  if (n === READ_WARN) {
+    const big = size > 30 * 1024 ? `（${Math.round(size / 1024)} KB，每次读取都会整段进入上下文）` : '';
+    st.notes.push(`${path.basename(file)} 已经第 ${n} 次被读取，而且内容在此期间没有变化${big}。直接使用上下文里已有的内容，不要再重复读取；只需要其中一部分时，按行号范围读取。`);
+  }
+  // 控制状态文件大小
+  const keys = Object.keys(st.reads);
+  if (keys.length > 300) for (const k of keys.slice(0, keys.length - 300)) delete st.reads[k];
+}
+
 function startCheck(conv, files) {
   if (!files.size) return;
   try {
@@ -74,6 +100,7 @@ function processInvocation(inp, st, conv) {
   for (const r of readNewResults(st, transcriptPathFor(inp))) {
     if (r.name === 'run_command') onCommand(r, st);
     else if (EDIT_TOOLS.test(r.name)) onEdit(r, st, toCheck);
+    else if (READ_TOOLS.test(r.name)) onRead(r, st);
   }
   if (!st.turnStart) st.turnStart = Date.now();
 

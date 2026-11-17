@@ -27,7 +27,7 @@
   },
   "claude-boost-verify": {
     "Stop": [
-      { "type": "command", "command": "node hooks/stop.mjs", "timeout": 10 }
+      { "type": "command", "command": "node hooks/stop.mjs", "timeout": 30 }
     ]
   }
 }

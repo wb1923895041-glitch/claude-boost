@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DATA_DIR } from './lib.mjs';
 
-const DEFAULTS = { notify: true, notifyMinSeconds: 60 };
+const DEFAULTS = { notify: true, notifyMinSeconds: 60, autoRetry: true, autoRetryWaitSeconds: 8 };
 
 /** 用户配置：~/.gemini/claude-boost/config.json */
 export function loadConfig() {
