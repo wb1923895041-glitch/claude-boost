@@ -16,12 +16,6 @@
     ]
   },
   "claude-boost-autocheck": {
-    "PostToolUse": [
-      {
-        "matcher": "run_command|write_to_file|replace_file_content|multi_replace_file_content|write_file|edit_file",
-        "hooks": [{ "type": "command", "command": "node hooks/post-tool.mjs", "timeout": 20 }]
-      }
-    ],
     "PreInvocation": [
       { "type": "command", "command": "node hooks/pre-invocation.mjs", "timeout": 10 }
     ]

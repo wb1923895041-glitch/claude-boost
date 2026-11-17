@@ -1,7 +1,7 @@
 {
   "name": "claude-boost",
   "displayName": "Claude Boost 增强包",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "把 Claude Code 的好用机制带进反重力：编辑前快照与一键回滚、危险命令与密钥泄露拦截、死循环检测、改完自动检查、完成通知、长期记忆、会话交接，以及代码审查 / 安全审查 / init / commit 技能。",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [

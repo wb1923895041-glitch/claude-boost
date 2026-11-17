@@ -143,10 +143,21 @@ ok(r.decision === 'force_ask' && /GitHub/.test(r.reason), 'git: 提交内容含�
 g('reset', '-q'); fs.writeFileSync(path.join(repo, 'app.js'), 'ok'); g('add', 'app.js');
 ok(gcmd('git commit -m "x"').decision === 'ask', 'git: 干净提交放行');
 
-// ---- 死循环检测 ----
-const post = (conv2, name, args, error) => hook('post-tool.mjs', { conversationId: conv2, toolCall: { name, args }, ...(error ? { error } : {}) });
-const pre = (conv2) => hook('pre-invocation.mjs', { conversationId: conv2 });
+// ---- 死循环检测（PreInvocation 增量读取会话记录里的工具结果）----
+const trDir = path.join(TMP, 'transcripts');
+fs.mkdirSync(trDir, { recursive: true });
+const trOf = (c) => path.join(trDir, `${c}.jsonl`);
+const pre = (conv2) => hook('pre-invocation.mjs', { conversationId: conv2, transcriptPath: trOf(conv2) });
+// 模拟反重力写入会话记录：一次模型调用 + 对应的工具结果
+const post = (conv2, name, args, error) => {
+  const content = name === 'run_command' ? `Completed At: x\nThe command exited with code ${error ? 1 : 0}.` : 'ok';
+  fs.appendFileSync(trOf(conv2),
+    JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name, args }] }) + '\n' +
+    JSON.stringify({ type: 'GENERIC', status: 'DONE', content }) + '\n');
+};
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const sysMsg = (x) => x?.injectSteps?.[0]?.systemMessage?.systemMessage || '';
+for (const c of ['loop', 'chk']) { fs.writeFileSync(trOf(c), JSON.stringify({ type: 'USER_INPUT', content: 'hi' }) + '\n'); pre(c); }
 post('loop', 'run_command', { CommandLine: 'npm test' }, 'exit status 1');
 ok(sysMsg(pre('loop')) === '', 'loop: 失败 1 次不提醒');
 post('loop', 'run_command', { CommandLine: 'npm  test' }, 'exit status 1');
@@ -165,27 +176,34 @@ fs.writeFileSync(ft, 'x');
 for (let i = 0; i < 6; i++) post('loop', 'replace_file_content', { TargetFile: ft });
 ok(/第 6 次修改 thrash\.txt/.test(sysMsg(pre('loop'))), 'loop: 同一文件改 6 次没验证 → 提醒');
 
-// ---- 改完自动检查 ----
+// ---- 改完自动检查（后台进程检查，下一次模型调用前注入）----
+// 第一次 pre 发现编辑并启动后台检查；等检查跑完，第二次 pre 注入结果
+const preAfterCheck = (c) => { const t0 = Date.now(); const first = pre(c); sleepMs(2500); return { first, second: pre(c), t: Date.now() - t0 }; };
 const fjs = path.join(proj, 'bad.js');
 fs.writeFileSync(fjs, 'function x( {\n  return 1\n}\n');
 post('chk', 'write_to_file', { TargetFile: fjs });
-r = sysMsg(pre('chk'));
-ok(/bad\.js/.test(r) && /SyntaxError/.test(r), 'check: JS 语法错误 → 注入给 Agent');
+let pc = preAfterCheck('chk');
+ok(sysMsg(pc.first) === '', 'check: 检查在后台进行，不阻塞当次调用');
+r = sysMsg(pc.second);
+ok(/bad\.js/.test(r) && /SyntaxError/.test(r), 'check: JS 语法错误 → 下一次调用前注入给 Agent');
 ok(sysMsg(pre('chk')) === '', 'check: 同一错误不重复注入');
 fs.writeFileSync(fjs, 'function x() {\n  return 1\n}\n');
 post('chk', 'write_to_file', { TargetFile: fjs });
-ok(sysMsg(pre('chk')) === '', 'check: 修好后不再提示');
+ok(sysMsg(preAfterCheck('chk').second) === '', 'check: 修好后不再提示');
 const fjson = path.join(proj, 'data.json');
 fs.writeFileSync(fjson, '{"a": 1,}');
 post('chk', 'write_to_file', { TargetFile: fjson });
-ok(/JSON 语法错误/.test(sysMsg(pre('chk'))), 'check: JSON 语法错误');
+ok(/JSON 语法错误/.test(sysMsg(preAfterCheck('chk').second)), 'check: JSON 语法错误');
 const fpy = path.join(proj, 'bad.py');
 fs.writeFileSync(fpy, 'def f(:\n    pass\n');
 post('chk', 'write_to_file', { TargetFile: fpy });
-ok(/bad\.py/.test(sysMsg(pre('chk'))), 'check: Python 语法错误');
+ok(/bad\.py/.test(sysMsg(preAfterCheck('chk').second)), 'check: Python 语法错误');
 fs.writeFileSync(fpy, 'def f():\n    return 1\n');
 post('chk', 'write_to_file', { TargetFile: fpy });
-ok(sysMsg(pre('chk')) === '', 'check: 正确的 Python 不误报');
+ok(sysMsg(preAfterCheck('chk').second) === '', 'check: 正确的 Python 不误报');
+// 第一次见到的会话不回放历史记录（避免对旧会话补发提醒）
+fs.writeFileSync(trOf('old'), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'x' } }] }) + '\n' + JSON.stringify({ type: 'GENERIC', status: 'ERROR', content: 'boom' }) + '\n');
+ok(sysMsg(pre('old')) === '', 'check: 已有历史的会话首次接入时不回放旧结果');
 
 // ---- 交接提示 ----
 const hdir = path.join(proj, '.agents', 'handoff');
